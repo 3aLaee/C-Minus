@@ -1,0 +1,21 @@
+/*
+*   Cannot evaluate expression
+*   While statement test must be an int or int comparison
+*/
+
+
+int test(void) {
+    int x[5];
+    return x;
+}
+
+void test2(void) {
+    int y;
+}
+
+void main(void) {
+  int x; int y;
+  if(test2()) {
+    x = 4 + output(3);
+  }
+}

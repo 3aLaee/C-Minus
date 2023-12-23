@@ -1,0 +1,455 @@
+
+//import java_cup.runtime.*;
+import absyn.Declaration.*;
+import absyn.Statements.*;
+import absyn.Expressions.*;
+import java.util.ArrayList;
+   
+/* Parser code to change the way the parser reports errors (include
+   line and column number of the error). */
+parser code {:
+   
+   String scope = "global";
+   ArrayList<String> global_vars = new ArrayList<String>();
+   ArrayList<String> funcs = new ArrayList<String>() {
+      {
+         add("input()");
+         add("output(int)");
+      }
+   };
+
+   /* Change the method report_error so it will display the line and
+      column of where the error occurred in the input as well as the
+      reason for the error which is passed into the method in the
+      String 'message'. */
+   public void report_error(String message, Object info) {
+
+      /* Create a StringBuffer called 'm' with the string 'Error' in it. */
+      StringBuffer m = new StringBuffer("Error");
+
+      /* Check if the information passed to the method is the same
+         type as the type java_cup.runtime.Symbol. */
+      if (info instanceof java_cup.runtime.Symbol) {
+         /* Declare a java_cup.runtime.Symbol object 's' with the
+            information in the object info that is being typecasted
+            as a java_cup.runtime.Symbol object. */
+         java_cup.runtime.Symbol s = ((java_cup.runtime.Symbol) info);
+
+         /* Check if the line number in the input is greater or
+            equal to zero. */
+         if (s.left >= 0) {                
+               /* Add to the end of the StringBuffer error message
+                  the line number of the error in the input. */
+               m.append(" in line "+(s.left+1));   
+               /* Check if the column number in the input is greater
+                  or equal to zero. */
+               if (s.right >= 0)                    
+                  /* Add to the end of the StringBuffer error message
+                     the column number of the error in the input. */
+                  m.append(", column "+(s.right+1));
+         }
+      }
+
+      /* Add to the end of the StringBuffer error message created in
+         this method the message that was passed into this method. */
+      m.append(" : "+ message);
+
+      /* Print the contents of the StringBuffer 'm', which contains
+         an error message, out on a line. */
+      System.err.println(m);
+   }
+
+   /* Change the method report_fatal_error so when it reports a fatal
+      error it will display the line and column number of where the
+      fatal error occurred in the input as well as the reason for the
+      fatal error which is passed into the method in the object
+      'message' and then exit.*/
+   public void report_fatal_error(String message, Object info) {
+      report_error(message, info);
+      System.exit(1);
+   }
+
+:};
+   
+   
+/* ------------Declaration of Terminals and Non Terminals Section----------- */
+   
+terminal IF, ELSE, WHILE, INT, RETURN, VOID;
+terminal ASSIGN, EQ, NEQ, LT, LTE, GT, GTE, PLUS, MINUS, TIMES, OVER, SEMI;
+terminal COMMA, LPAREN, RPAREN, LBRACKET, RBRACKET, LBRACE, RBRACE;
+terminal String ID, NUM, INPUT, OUTPUT;
+terminal ERROR;
+
+non terminal DeclarationList program, dec_list, params, param_list, local_decl;
+non terminal Declaration decl, var_decl, func_decl, func_sig, param;
+non terminal StatementList stmt_list, args, arg_list;
+non terminal Statement stmt, if_stmt, expr_stmt, while_stmt, return_stmt;
+non terminal CompoundStatement compound_stmt;
+non terminal ExpressionStatement expr, var, simple_exp, additive_expr, call, term, factor;
+non terminal String type_spec, def_funcs;
+non terminal Integer relop, addop, mulop;
+
+precedence left IF, ELSE, WHILE, RETURN, SEMI, LPAREN, LBRACE, NUM, INPUT, OUTPUT, ID, INT, VOID;
+
+/* ----------------------------Grammar Section-------------------- */
+   
+start with program;
+
+program        ::= dec_list:d
+                  {: RESULT = d; :}
+               ;
+
+dec_list       ::= dec_list:dl decl:de 
+                  {: 
+                     if(de != null) {
+                        DeclarationList d = dl;
+                        while( d.tail != null )
+                           d = d.tail;
+                        d.tail = new DeclarationList(dlleft, dlright, de, null);
+                     }
+                     RESULT = dl;
+                  :}
+               | decl:d
+                  {: RESULT = new DeclarationList(dleft, dright, d, null); :}
+               | dec_list:dl error SEMI
+                  {:
+                     parser.report_error("Syntax Error (line "+(dlleft+1)+", col "+(dlright+1)+")", null);
+                     RESULT = dl;
+                  :}
+               |
+                  {: RESULT = null; :}
+               ;
+            
+decl           ::= var_decl:v 
+                  {: 
+                     if(v != null) {
+                        String varStr = v.type + " " + v.name;
+                        if(!global_vars.contains(varStr)) {
+                           global_vars.add(varStr);
+                           RESULT = v;
+                        }else{
+                           parser.report_error("Global variable already exists (line " 
+                              + (v.row + 1) + ", col " + (v.col + 1) + ")", null);
+                           RESULT = null;
+                        }
+                         
+                     }else {
+                        RESULT = null;
+                     }
+                  :}
+               | func_decl:f
+                  {: RESULT = f; :}
+               ;
+
+var_decl       ::= type_spec:t ID:id SEMI 
+                  {: 
+                     String varStr = t + " " + id;
+                     RESULT = new VarDeclaration(tleft, tright, t, id, null);
+                  :}
+               | type_spec:t ID:id LBRACKET NUM:n RBRACKET SEMI
+                  {:
+                     String varStr = t + " " + id + "[]";
+                     RESULT = new VarDeclaration(tleft, tright, t, id, Integer.parseInt(n));
+                  :}
+               ;
+
+func_decl      ::= func_sig:f compound_stmt:s
+                  {: 
+                     FuncDeclaration d = (FuncDeclaration)f;
+                     if(d != null) {
+                        d.setFuncBody(s);
+                     }
+                     scope = "global";
+                     RESULT = d; 
+                  :}
+               ;
+         
+func_sig       ::= type_spec:t ID:id LPAREN params:p RPAREN
+                  {: 
+                     String args = "";
+                     DeclarationList curr = p;
+                     while( curr != null ) {
+                        args += "int";
+                        curr = curr.tail;
+                        if(curr != null) {
+                           args += ", ";
+                        }
+                     }
+                     String funcStr = id + "(" + args + ")";
+                     if(funcs.contains("main()")){ 
+                        parser.report_error("Function declared after main function (line " 
+                           + (tleft + 1) + ", col " + (tright + 1) + ")" , null);
+                        RESULT = null;
+                     }else if(!funcs.contains(funcStr)) {
+                        scope = funcStr;
+                        funcs.add(funcStr);
+                        RESULT = new FuncDeclaration(tleft, tright, t, id, p, null); ;
+                     } else {
+                        parser.report_error("Function already exists (line " 
+                           + (tleft + 1) + ", col " + (tright + 1) + ")" , null);
+                        RESULT = null;
+                     }
+                  :}
+               ;
+
+type_spec      ::= INT 
+                  {: RESULT = "int"; :}
+               | VOID
+                  {: RESULT = "void"; :}
+               ;
+
+params         ::= param_list:p 
+                  {: RESULT = p; :}
+               | VOID
+                  {: RESULT = null; :}
+               ;
+
+param_list     ::= param_list:pl COMMA param:p 
+                  {:
+                     DeclarationList d = pl;
+                     while( d != null &&  d.tail != null )
+                        d = d.tail;
+                     d.tail = new DeclarationList(plleft, plright, p, null);
+                     RESULT = pl;
+                  :}
+               | param:p
+                  {: RESULT = new DeclarationList(pleft, pright, p, null); :}
+               ;
+
+param          ::= type_spec:t ID:id 
+                  {: RESULT = new VarDeclaration(tleft, tright, t, id, null); :}
+               | type_spec:t ID:id LBRACKET RBRACKET
+                  {: RESULT = new VarDeclaration(tleft, tright, t + "[]", id, null); :}
+               ;
+
+compound_stmt  ::= LBRACE:l local_decl:d stmt_list:s RBRACE
+                  {: RESULT = new CompoundStatement(lleft, lright, d, s); :}
+               ;
+
+local_decl     ::= local_decl:dl var_decl:v 
+                  {:
+                     if(v != null) {
+                        DeclarationList d = dl;
+                        String varStr2 = "";
+                        String varStr = ((VarDeclaration)v).type + " " + ((VarDeclaration)v).name;
+                        if(((VarDeclaration)v).size > 0) {
+                           varStr += "[]";
+                        }
+
+                        if(d == null) {
+                           dl = new DeclarationList(vleft, vright, v, null);
+                        }else{
+                           while( d != null && d.head != null) {
+                              varStr2 = ((VarDeclaration)(d.head)).type + " " + ((VarDeclaration)(d.head)).name;
+                              if(((VarDeclaration)(d.head)).size > 0) {
+                                 varStr2 += "[]";
+                              }
+                              if(varStr.equals(varStr2)) {
+                                 parser.report_error("Variable already exists (line " +
+                                    (vleft + 1) + ", col " + (vright + 1) + ")", null);
+                                 break;
+                              }
+
+                              if(d.tail == null)
+                                 break;
+                              else      
+                                 d = d.tail;
+                           }
+
+                           if(!varStr.equals(varStr2)) {
+                              d.tail = new DeclarationList(vleft, vright, v, null);
+                           }
+                        }
+                     }
+                     
+                     RESULT = dl;
+                  :}
+               | var_decl:v
+                  {: 
+                     DeclarationList dl = null;
+                     if(v != null) {
+                        String varStr = ((VarDeclaration)v).type + " " + ((VarDeclaration)v).name;
+                        if(((VarDeclaration)v).size > 0) {
+                           varStr += "[]";
+                        }
+                        
+                        dl = new DeclarationList(vleft, vright, v, null);
+                        
+                     }
+
+                     RESULT = dl;
+                  :}
+               | 
+                  {: RESULT = null; :}
+               ;
+
+stmt_list      ::= stmt_list:sl stmt:s 
+                  {:
+                     StatementList d = sl;
+                     while( d != null && d.tail != null )
+                        d = d.tail;
+                     d.tail = new StatementList(slleft, slright, s, null);
+                     RESULT = sl;
+                  :}
+               | stmt:s
+                  {: RESULT = new StatementList(sleft, sright, s, null); :}
+               | stmt_list:sl error:e
+                  {: 
+                     parser.report_error("Variable must be declared at the top of the function (line "+
+                        (eleft + 1) + ", col " + (eright + 1) + ")", null);
+                     RESULT = sl;
+                  :}
+               | 
+                  {: RESULT = null; :}
+               ;
+
+stmt           ::= expr_stmt:e 
+                  {: RESULT = e; :}
+               | compound_stmt:c 
+                  {: RESULT = c; :}
+               | if_stmt:i 
+                  {: RESULT = i; :}
+               | while_stmt:w 
+                  {: RESULT = w; :}
+               | return_stmt:r 
+                  {: RESULT = r; :}
+               ;
+
+expr_stmt      ::= expr:e SEMI 
+                  {: RESULT = e; :}
+               | SEMI 
+                  {: RESULT = null; :}
+               ;
+
+if_stmt        ::= IF:i LPAREN expr:e RPAREN stmt:s 
+                  {: RESULT = new IfStatement(ileft, iright, e, s, null); :}
+               | IF:i LPAREN expr:e RPAREN stmt:s1 ELSE stmt:s2 
+                  {: RESULT = new IfStatement(ileft, iright, e, s1, s2); :}
+               ;
+
+while_stmt     ::= WHILE:w LPAREN expr:e RPAREN stmt:s 
+                  {: RESULT = new WhileStatement(wleft, wright, e, s); :}
+               ;
+
+return_stmt    ::= RETURN:r expr:e SEMI 
+                  {: RESULT = new ReturnStatement(rleft, rright, e); :}
+               | RETURN:r SEMI 
+                  {: RESULT = new ReturnStatement(rleft, rright, null); :}
+               ;
+
+expr           ::= var:v ASSIGN expr:e
+                  {: RESULT = new AssignExpression(vleft, vright, (VarExpression)v, e); :}
+               | simple_exp:s
+                  {: RESULT = s; :}
+               ;
+
+var            ::= ID:i 
+                  {: RESULT = new VarExpression(ileft, iright, i, null); :}
+               | ID:i LBRACKET expr:e RBRACKET 
+                  {: RESULT = new VarExpression(ileft, iright, i, e); :}
+               ;
+
+simple_exp     ::= additive_expr:a1 relop:o additive_expr:a2 
+                  {: RESULT = new OpExpression(a1left, a1right, a1, o, a2); :}
+               | additive_expr:a
+                  {: RESULT = a; :}
+               ;
+
+relop          ::= LT 
+                     {: RESULT = OpExpression.LT; :}
+                  | LTE 
+                     {: RESULT = OpExpression.LTE; :}
+                  | GT 
+                     {: RESULT = OpExpression.GT; :}
+                  | GTE 
+                     {: RESULT = OpExpression.GTE; :}
+                  | EQ 
+                     {: RESULT = OpExpression.EQ; :}
+                  | NEQ 
+                     {: RESULT = OpExpression.NEQ; :}
+                  ;
+
+additive_expr  ::= additive_expr:a addop:o term:t 
+                  {: RESULT = new OpExpression(aleft, aright, a, o, t); :}
+               | term:t
+                  {: RESULT = t; :}
+               ;
+
+addop          ::= PLUS 
+                  {: RESULT = OpExpression.PLUS; :}
+               | MINUS
+                  {: RESULT = OpExpression.MINUS; :}
+               ;
+
+term           ::= term:t mulop:o factor:f 
+                  {: RESULT = new OpExpression(tleft, tright, t, o, f); :}
+               | factor:f
+                  {: RESULT = f; :}
+               ;
+
+mulop          ::= TIMES 
+                  {: RESULT = OpExpression.TIMES; :}
+               | OVER 
+                  {: RESULT = OpExpression.OVER; :}
+               ;
+
+factor         ::= LPAREN expr:e RPAREN 
+                  {: RESULT = e; :}
+               | var:v 
+                  {: RESULT = v; :}
+               | call:c 
+                  {: 
+                     FuncExpression f = (FuncExpression) c;
+                     String funcStr = f.funcName + "(";
+                     StatementList args = f.args;
+                     while(args != null) {
+                        funcStr += "int";
+                        args = args.tail;
+                        if(args != null) {
+                           funcStr += ", ";
+                        }
+                     }
+                     funcStr += ")";
+                     if(!funcs.contains(funcStr)) {
+                        parser.report_error(
+                           "Function called is not defined (line " 
+                           + (f.row + 1) + ", col " + (f.col + 1) + ")"
+                           , null);
+                        RESULT = null;
+                     }else{
+                        RESULT = c;
+                     }
+                     
+                      
+                  :}
+               | NUM:n
+                  {: RESULT = new IntExpression(nleft, nright, n); :}
+               ;
+
+call           ::= ID:i LPAREN args:a RPAREN 
+                  {: RESULT = new FuncExpression(ileft, iright, i, a); :}
+               | def_funcs:i LPAREN args:a RPAREN 
+                  {: RESULT = new FuncExpression(ileft, iright, i, a); :}
+               ;
+
+def_funcs      ::= INPUT
+                  {: RESULT = "input"; :}
+               | OUTPUT
+                  {: RESULT = "output"; :}
+               ;
+
+args           ::= arg_list:a 
+                  {: RESULT = a; :}
+               | ;
+
+arg_list       ::= arg_list:al COMMA expr:e 
+                  {:
+                     StatementList d = al;
+                     while( d.tail != null )
+                        d = d.tail;
+                     d.tail = new StatementList(alleft, alright, e, null);
+                     RESULT = al;
+                  :}
+               | expr:e 
+                  {: RESULT = new StatementList(eleft, eright, e, null); :}
+               ;

@@ -1,0 +1,14 @@
+/*
+error*/
+
+int multiply(int a, int b){
+    return a*b;
+}
+
+int main() {
+    int a = 5;
+    int b = 10;
+    int product = multiply(a, c);
+    printf("The product is: %d", product);
+    return 0;
+}
